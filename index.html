@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pokémon TCG - Seguimiento de Precios</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f0f0f5;
+      color: #000;
+      padding: 20px;
+      text-align: center;
+    }
+    textarea, select, button, input {
+      padding: 10px;
+      margin: 5px;
+      width: 80%;
+      max-width: 400px;
+    }
+    .carta {
+      background: #fff;
+      margin: 10px auto;
+      padding: 15px;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      text-align: left;
+      max-width: 500px;
+    }
+    .carta img {
+      width: 100%;
+      border-radius: 8px;
+    }
+    #loader {
+      display: none;
+      margin: 10px;
+    }
+    #tipoCambio {
+      margin-top: 10px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h1>Pokémon TCG - Seguimiento de Precios</h1>
+
+  <textarea id="nombresCartas" rows="4" placeholder="Escribe nombres de cartas, una por línea"></textarea><br />
+  <select id="filtroRarity">
+    <option value="">-- Filtrar por Rareza --</option>
+    <option>Common</option>
+    <option>Uncommon</option>
+    <option>Rare</option>
+    <option>Holo Rare</option>
+    <option>Ultra Rare</option>
+    <option>Secret Rare</option>
+    <option>Promo</option>
+  </select>
+  <select id="filtroTipo">
+    <option value="">-- Filtrar por Tipo --</option>
+    <option>Pokémon</option>
+    <option>Trainer</option>
+    <option>Energy</option>
+  </select>
+  <br />
+  <button onclick="buscarCartas()">Buscar Cartas</button>
+  <button onclick="borrarHistorial()">Borrar Historial</button>
+
+  <div id="tipoCambio"></div>
+  <input type="number" id="editarCambio" placeholder="Editar tipo de cambio MXN" />
+  <button onclick="actualizarCambioManual()">Actualizar Precios</button>
+
+  <img id="loader" src="https://media.tenor.com/R-tmRp6rkxQAAAAj/pikachu-thunder.gif" alt="Cargando..." width="100" />
+
+  <div id="resultados"></div>
+
+  <script>
+    const apiKey = '5b341ba1-afe9-4652-a45e-3bda5cbf42cc';
+    let tipoCambio = 17;
+    const storageKey = 'seguimientoPrecios';
+
+    async function obtenerTipoCambio() {
+      try {
+        const res = await fetch('https://api.exchangerate.host/latest?base=USD&symbols=MXN');
+        const data = await res.json();
+        tipoCambio = data.rates.MXN;
+        document.getElementById('tipoCambio').innerText = `Tipo de cambio actual: 1 USD = $${tipoCambio.toFixed(2)} MXN`;
+      } catch (e) {
+        console.log('Error en tipo de cambio:', e);
+      }
+    }
+
+    function actualizarCambioManual() {
+      const valor = parseFloat(document.getElementById('editarCambio').value);
+      if (valor && valor > 0) {
+        tipoCambio = valor;
+        document.getElementById('tipoCambio').innerText = `Tipo de cambio editado: 1 USD = $${tipoCambio.toFixed(2)} MXN`;
+        document.getElementById('resultados').innerHTML = '';
+      }
+    }
+
+    function guardarHistorial(nombre, precio) {
+      const datos = JSON.parse(localStorage.getItem(storageKey) || '{}');
+      datos[nombre] = {
+        precio,
+        fecha: new Date().toISOString().split('T')[0]
+      };
+      localStorage.setItem(storageKey, JSON.stringify(datos));
+    }
+
+    function obtenerHistorial(nombre) {
+      const datos = JSON.parse(localStorage.getItem(storageKey) || '{}');
+      return datos[nombre];
+    }
+
+    function borrarHistorial() {
+      localStorage.removeItem(storageKey);
+      alert('✅ Historial eliminado correctamente.');
+    }
+
+    async function buscarCartas() {
+      const loader = document.getElementById('loader');
+      const resultados = document.getElementById('resultados');
+      resultados.innerHTML = '';
+      loader.style.display = 'block';
+
+      await obtenerTipoCambio();
+
+      const nombres = document.getElementById('nombresCartas').value.trim().split('\n').filter(Boolean);
+      const rarity = document.getElementById('filtroRarity').value;
+      const tipo = document.getElementById('filtroTipo').value;
+
+      for (const nombre of nombres) {
+        try {
+          const query = `name:${encodeURIComponent(nombre)}*` + (rarity ? ` AND rarity:${rarity}` : '') + (tipo ? ` AND supertype:${tipo}` : '');
+          const res = await fetch(`https://api.pokemontcg.io/v2/cards?q=${query}&orderBy=-set.releaseDate`, {
+            headers: { 'X-Api-Key': apiKey }
+          });
+          const data = await res.json();
+          if (!data.data.length) {
+            resultados.innerHTML += `<div class='carta'><strong>${nombre}</strong><br>No encontrado.</div>`;
+            continue;
+          }
+          const carta = data.data[0];
+          const precios = carta.tcgplayer?.prices || {};
+          const market = precios.normal?.market ?? precios.holofoil?.market ?? precios.reverseHolofoil?.market;
+          const marketMXN = market ? (market * tipoCambio).toFixed(2) : 'N/A';
+          let cambio = '';
+          const historial = obtenerHistorial(carta.name);
+          if (historial && market) {
+            const diff = market - historial.precio;
+            const simbolo = diff > 0 ? '🔼' : diff < 0 ? '🔽' : '➖';
+            cambio = ` ${simbolo} (${diff.toFixed(2)} desde ${historial.fecha})`;
+          }
+          if (market) guardarHistorial(carta.name, market);
+
+          resultados.innerHTML += `
+            <div class='carta'>
+              <strong>Nombre:</strong> ${carta.name}<br>
+              <strong>Set:</strong> ${carta.set.name}<br>
+              <strong>Tipo:</strong> ${carta.supertype || 'Desconocido'}<br>
+              <strong>Rareza:</strong> ${carta.rarity || 'Desconocida'}<br>
+              <strong>Precio promedio:</strong> $${market ?? 'N/A'} USD${cambio}<br>
+              <strong>Precio MXN:</strong> $${marketMXN}<br>
+              <a href="${carta.tcgplayer?.url}" target="_blank">Ver en TCGPlayer</a><br>
+              ${carta.images?.large ? `<img src="${carta.images.large}" />` : ''}
+            </div>`;
+        } catch (e) {
+          resultados.innerHTML += `<div class='carta'><strong>${nombre}</strong><br>Error al buscar.</div>`;
+        }
+      }
+      loader.style.display = 'none';
+    }
+  </script>
+</body>
+</html>
